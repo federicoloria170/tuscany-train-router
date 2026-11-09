@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: tuscany-router
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: backend }
+  template:
+    metadata:
+      labels: { app: backend }
+    spec:
+      containers:
+        - name: backend
+          image: tuscany/backend:dev
+          imagePullPolicy: Never          # l'immagine è stata costruita DENTRO Minikube, non esiste su internet
+          ports:
+            - containerPort: 8000
+          env:
+            - { name: REDIS_URL, value: "redis://redis:6379" }
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: app-secrets, key: POSTGRES_PASSWORD }
+            # $(VAR) viene sostituito da Kubernetes con il valore della variabile definita sopra
+            - { name: DATABASE_URL, value: "postgresql://train:$(POSTGRES_PASSWORD)@postgres:5432/trainrouter" }
+          readinessProbe:
+            httpGet: { path: /health, port: 8000 }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /health, port: 8000 }
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { memory: 384Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  namespace: tuscany-router
+spec:
+  selector: { app: backend }
+  ports:
+    - port: 8000

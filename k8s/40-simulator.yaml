@@ -1,0 +1,22 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: simulator
+  namespace: tuscany-router
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: simulator }
+  template:
+    metadata:
+      labels: { app: simulator }
+    spec:
+      containers:
+        - name: simulator
+          image: tuscany/simulator:dev
+          imagePullPolicy: Never
+          env:
+            - { name: REDIS_URL, value: "redis://redis:6379" }
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { memory: 128Mi }

@@ -1,0 +1,22 @@
+# KEDA guarda la coda Redis e regola il numero di worker.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: worker-scaler
+  namespace: tuscany-router
+spec:
+  scaleTargetRef:
+    name: worker                 # il Deployment da scalare
+  minReplicaCount: 0             # SCALE-TO-ZERO: coda vuota = nessun pod
+  maxReplicaCount: 5             # tetto massimo
+  pollingInterval: 5             # KEDA controlla la coda ogni 5 secondi
+  cooldownPeriod: 60             # aspetta 60s di coda vuota prima di tornare a 0
+  triggers:
+    - type: redis-streams
+      metadata:
+        address: redis.tuscany-router.svc.cluster.local:6379
+        stream: route-requests
+        consumerGroup: workers
+        # lagCount = messaggi in coda non ancora consegnati. Target: 2 messaggi per worker.
+        # Es: 1-2 messaggi -> 1 pod, 5 messaggi -> 3 pod, 10+ -> 5 pod (max).
+        lagCount: "2"

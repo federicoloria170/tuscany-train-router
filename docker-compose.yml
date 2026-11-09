@@ -1,0 +1,27 @@
+# TEST LOCALE rapido (senza Kubernetes): docker compose up --build
+# Apri poi http://localhost:8080
+services:
+  redis:
+    image: redis/redis-stack-server:latest   # Redis + moduli JSON/Search, richiesti dal checkpointer LangGraph
+  postgres:
+    image: postgres:16-alpine
+    environment: { POSTGRES_USER: train, POSTGRES_PASSWORD: train, POSTGRES_DB: trainrouter }
+  backend:
+    build: { context: ., dockerfile: backend/Dockerfile }
+    environment:
+      REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgresql://train:train@postgres:5432/trainrouter
+    depends_on: [redis, postgres]
+  worker:
+    build: { context: ., dockerfile: worker/Dockerfile }
+    env_file: .env
+    environment: { REDIS_URL: "redis://redis:6379" }
+    depends_on: [redis]
+  simulator:
+    build: { context: ., dockerfile: simulator/Dockerfile }
+    environment: { REDIS_URL: "redis://redis:6379" }
+    depends_on: [redis]
+  frontend:
+    build: { context: ., dockerfile: frontend/Dockerfile }
+    ports: ["8080:80"]
+    depends_on: [backend]

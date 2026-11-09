@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tuscany Train Router</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+  :root {
+    --paper: #eef1ee; --panel: #ffffff; --ink: #1b2a26; --muted: #5d6d67;
+    --rail: #0f6b4f; --rail-dark: #0a4d38; --signal: #e8a317; --late: #c0392b; --line: #d5dcd8;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { font-family: Bahnschrift, "Segoe UI", system-ui, sans-serif; color: var(--ink); background: var(--paper); display: grid; grid-template-columns: 400px 1fr; }
+  aside { background: var(--panel); border-right: 1px solid var(--line); padding: 20px; overflow-y: auto; height: 100vh; }
+  h1 { font-size: 1.35rem; margin: 0 0 4px; }
+  .status { font-size: .85rem; color: var(--muted); margin-bottom: 18px; display: flex; align-items: center; gap: 6px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--late); }
+  .dot.on { background: var(--rail); }
+  label { display: block; font-size: .85rem; font-weight: 600; margin: 12px 0 4px; }
+  input[type=text] { width: 100%; padding: 10px; border: 1px solid var(--line); border-radius: 6px; font: inherit; }
+  input[type=text]:focus-visible, button:focus-visible { outline: 3px solid var(--signal); outline-offset: 1px; }
+  .choice { display: flex; gap: 8px; margin-top: 4px; }
+  .choice label { flex: 1; margin: 0; font-weight: 500; border: 1px solid var(--line); border-radius: 6px; padding: 9px; cursor: pointer; display: flex; gap: 6px; align-items: center; }
+  .choice input:checked + span { font-weight: 700; color: var(--rail-dark); }
+  button { width: 100%; margin-top: 16px; padding: 12px; border: 0; border-radius: 6px; background: var(--rail); color: #fff; font: inherit; font-weight: 700; cursor: pointer; }
+  button:hover { background: var(--rail-dark); }
+  button:disabled { background: var(--muted); cursor: wait; }
+  #result { margin-top: 22px; }
+  .summary { display: flex; gap: 18px; padding: 12px; background: var(--paper); border-radius: 6px; font-weight: 700; }
+  .summary small { display: block; font-weight: 500; color: var(--muted); }
+  .explain { margin: 14px 0; line-height: 1.5; font-size: .95rem; }
+  .leg { padding: 10px 0; border-top: 1px solid var(--line); font-size: .9rem; }
+  .leg b { display: block; }
+  .leg span { color: var(--muted); }
+  .late { color: var(--late) !important; font-weight: 600; }
+  .error { color: var(--late); font-weight: 600; margin-top: 16px; }
+  .train-count { margin-top: 20px; font-size: .85rem; color: var(--muted); }
+  #map { height: 100vh; }
+  .train-icon { background: var(--signal); border: 2px solid var(--ink); border-radius: 50%; width: 14px; height: 14px; }
+  .train-icon.late { background: var(--late); }
+  @media (max-width: 800px) { body { grid-template-columns: 1fr; grid-template-rows: auto 60vh; } aside { height: auto; border-right: 0; } #map { height: 60vh; } }
+</style>
+</head>
+<body>
+<aside>
+  <h1>Tuscany Train Router</h1>
+  <div class="status"><span class="dot" id="dot"></span><span id="statusText">Connessione in corso…</span></div>
+
+  <form id="form">
+    <label for="origin">Stazione di partenza</label>
+    <input type="text" id="origin" placeholder="es. Firenze SMN" required>
+    <label for="destination">Stazione di arrivo</label>
+    <input type="text" id="destination" placeholder="es. Pisa" required>
+    <label>Criterio</label>
+    <div class="choice">
+      <label><input type="radio" name="criterion" value="shortest" checked><span>Più breve</span></label>
+      <label><input type="radio" name="criterion" value="cheapest"><span>Più economico</span></label>
+    </div>
+    <button type="submit" id="submit">Calcola percorso</button>
+  </form>
+
+  <div id="result" aria-live="polite"></div>
+  <div class="train-count" id="trainCount"></div>
+</aside>
+<div id="map"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+// ---------- Mappa ----------
+const map = L.map('map').setView([43.5, 11.0], 8);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OpenStreetMap' }).addTo(map);
+const stationsById = {};
+const trainMarkers = {};
+let routeLayer = null;
+
+fetch('/api/stations').then(r => r.json()).then(list => {
+  list.forEach(s => {
+    stationsById[s.id] = s;
+    L.circleMarker([s.lat, s.lon], { radius: 5, color: '#0f6b4f', fillColor: '#fff', fillOpacity: 1, weight: 2 })
+      .bindTooltip(s.name).addTo(map);
+  });
+});
+
+// ---------- WebSocket ----------
+const dot = document.getElementById('dot'), statusText = document.getElementById('statusText');
+const resultBox = document.getElementById('result'), submitBtn = document.getElementById('submit');
+let ws;
+
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
+  ws.onopen = () => { dot.classList.add('on'); statusText.textContent = 'Connesso in tempo reale'; };
+  ws.onclose = () => { dot.classList.remove('on'); statusText.textContent = 'Disconnesso, riconnessione…'; setTimeout(connect, 2000); };
+  ws.onmessage = (ev) => {
+    const msg = JSON.parse(ev.data);
+    if (msg.type === 'telemetry') updateTrains(msg.trains);
+    else if (msg.type === 'queued') resultBox.innerHTML = '<p>Richiesta in coda… un worker la sta elaborando (se era a zero può servire qualche secondo per accenderlo).</p>';
+    else if (msg.type === 'route_result') showResult(msg);
+    else if (msg.type === 'error') showError(msg.message);
+  };
+}
+
+function updateTrains(trains) {
+  trains.forEach(t => {
+    const icon = L.divIcon({ className: '', html: `<div class="train-icon ${t.delay_min >= 5 ? 'late' : ''}"></div>`, iconSize: [14, 14] });
+    const tip = `${t.line}<br>Prossima: ${t.next_station}<br>${t.status}${t.delay_min ? ' (+' + t.delay_min + ' min)' : ''}`;
+    if (trainMarkers[t.train_id]) {
+      trainMarkers[t.train_id].setLatLng([t.lat, t.lon]).setIcon(icon).setTooltipContent(tip);
+    } else {
+      trainMarkers[t.train_id] = L.marker([t.lat, t.lon], { icon }).bindTooltip(tip).addTo(map);
+    }
+  });
+  document.getElementById('trainCount').textContent = `${trains.length} treni in movimento`;
+}
+
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+function showError(message) {
+  submitBtn.disabled = false;
+  resultBox.innerHTML = `<p class="error">${esc(message)}</p>`;
+}
+
+function showResult(r) {
+  submitBtn.disabled = false;
+  if (!r.ok) return showError(r.error);
+  if (routeLayer) map.removeLayer(routeLayer);
+  const coords = r.path.map(id => stationsById[id]).filter(Boolean).map(s => [s.lat, s.lon]);
+  routeLayer = L.polyline(coords, { color: '#0f6b4f', weight: 6, opacity: .8 }).addTo(map);
+  map.fitBounds(routeLayer.getBounds(), { padding: [50, 50] });
+
+  const legs = r.legs.map(l => `
+    <div class="leg"><b>${esc(l.from)} → ${esc(l.to)}</b>
+      <span>${l.depart} → ${l.arrive} · ${esc(l.train_type)} ${l.train_number}</span>
+      ${l.delay_min ? `<span class="late"> · ritardo ${l.delay_min} min</span>` : ''}</div>`).join('');
+  resultBox.innerHTML = `
+    <div class="summary"><div>${r.total_minutes} min<small>durata</small></div><div>${r.total_price.toFixed(2)} €<small>prezzo stimato</small></div></div>
+    <p class="explain">${esc(r.explanation)}</p>${legs}`;
+}
+
+document.getElementById('form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  if (ws.readyState !== WebSocket.OPEN) return showError('Non sono connesso al server.');
+  submitBtn.disabled = true;
+  ws.send(JSON.stringify({
+    type: 'route_request',
+    origin: document.getElementById('origin').value.trim(),
+    destination: document.getElementById('destination').value.trim(),
+    criterion: document.querySelector('input[name=criterion]:checked').value,
+  }));
+});
+
+connect();
+</script>
+</body>
+</html>

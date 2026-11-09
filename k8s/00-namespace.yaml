@@ -1,0 +1,5 @@
+# Un namespace = una "cartella" isolata dentro il cluster. Tutto il nostro progetto vive qui.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tuscany-router

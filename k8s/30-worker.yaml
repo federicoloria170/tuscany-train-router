@@ -1,0 +1,27 @@
+# NOTA: niente "replicas" qui. Il numero di worker lo decide KEDA (vedi 31-keda-scaledobject.yaml).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+  namespace: tuscany-router
+spec:
+  selector:
+    matchLabels: { app: worker }
+  template:
+    metadata:
+      labels: { app: worker }
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: worker
+          image: tuscany/worker:dev
+          imagePullPolicy: Never
+          env:
+            - { name: REDIS_URL, value: "redis://redis:6379" }
+            - { name: GROQ_MODEL, value: "openai/gpt-oss-120b" }
+            - name: GROQ_API_KEY
+              valueFrom:
+                secretKeyRef: { name: app-secrets, key: GROQ_API_KEY }
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { memory: 512Mi }
